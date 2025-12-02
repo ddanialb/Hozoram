@@ -13,7 +13,7 @@ const client = wrapper(
 
 const BASE_URL = "https://haftometir.modabberonline.com";
 
-// لیست گروه‌ها (از مرورگر گرفتیم)
+// لیست گروه‌ها
 const GROUP_IDS = [
   12482, 12339, 10331, 11566, 11811, 11852, 11974, 11970, 11792, 11459, 11336,
   11319, 10364, 10900, 9158, 10346,
@@ -143,17 +143,12 @@ async function getMessages(conversationId) {
   }
 }
 
-// ارسال پیام
+// ارسال پیام - روش صحیح!
 async function sendMessage(conversationId, messageText) {
   try {
     const response = await client.post(
-      `${BASE_URL}/api/Messenger/SendMessage`,
-      {
-        ConversationId: conversationId,
-        MessageText: messageText,
-        MessageType: 0,
-        ParentMessageId: 0,
-      },
+      `${BASE_URL}/api/Messenger/StartConversationAndSendAllMessage/${conversationId}/0/2/0/0/0/0`,
+      JSON.stringify(messageText),
       {
         headers: {
           "User-Agent":
