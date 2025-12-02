@@ -2,6 +2,7 @@ import axios from "axios";
 import * as cheerio from "cheerio";
 import { wrapper } from "axios-cookiejar-support";
 import { CookieJar } from "tough-cookie";
+import express from "express";
 
 const jar = new CookieJar();
 const client = wrapper(
@@ -12,6 +13,7 @@ const client = wrapper(
 );
 
 const BASE_URL = "https://haftometir.modabberonline.com";
+const PORT = process.env.PORT || 3000;
 
 // لیست گروه‌ها
 const GROUP_IDS = [
@@ -21,8 +23,68 @@ const GROUP_IDS = [
 
 const sentToday = new Set();
 let lastDate = "";
+let stats = {
+  startTime: new Date(),
+  loopCount: 0,
+  messagesSent: 0,
+  lastCheck: null,
+};
 
-// تبدیل میلادی به شمسی
+// ═══════════════════════════════════════════════════════════
+// Express Server
+// ═══════════════════════════════════════════════════════════
+
+const app = express();
+
+app.get("/", (req, res) => {
+  const uptime = Math.floor((Date.now() - stats.startTime) / 1000 / 60);
+  res.send(`
+    <html dir="rtl">
+    <head><title>Modabber Bot</title></head>
+    <body style="font-family: Tahoma; padding: 20px;">
+      <h1>🤖 Begoo Agha Dani On Top Pesar</h1>
+      <hr>
+      <p>✅ Status: <strong>Running</strong></p>
+      <p>⏱️ Uptime: <strong>${uptime} minutes</strong></p>
+      <p>🔄 Loops: <strong>${stats.loopCount}</strong></p>
+      <p>📤 Messages Sent: <strong>${stats.messagesSent}</strong></p>
+      <p>🕐 Last Check: <strong>${stats.lastCheck || "Not yet"}</strong></p>
+      <p>📋 Groups: <strong>${GROUP_IDS.length}</strong></p>
+      <p>📅 Today Sent: <strong>${sentToday.size}</strong></p>
+    </body>
+    </html>
+  `);
+});
+
+app.get("/health", (req, res) => {
+  res.send("OK");
+});
+
+app.get("/ping", (req, res) => {
+  res.send("pong");
+});
+
+// ═══════════════════════════════════════════════════════════
+// Self-Ping (Keep Alive)
+// ═══════════════════════════════════════════════════════════
+
+function startSelfPing() {
+  const APP_URL = process.env.RENDER_EXTERNAL_URL || `http://localhost:${PORT}`;
+
+  setInterval(async () => {
+    try {
+      await axios.get(`${APP_URL}/ping`);
+      console.log("🏓 Self-ping OK");
+    } catch (e) {
+      console.log("🏓 Self-ping failed (normal on startup)");
+    }
+  }, 60000); // هر 1 دقیقه
+}
+
+// ═══════════════════════════════════════════════════════════
+// Bot Functions
+// ═══════════════════════════════════════════════════════════
+
 function gregorianToJalali(gDate) {
   const date = new Date(gDate);
   let gy = date.getFullYear();
@@ -80,7 +142,6 @@ function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-// لاگین
 async function login() {
   console.log("🔐 Logging in...");
 
@@ -119,7 +180,6 @@ async function login() {
   console.log("✅ Logged in!\n");
 }
 
-// گرفتن پیام‌های گروه
 async function getMessages(conversationId) {
   try {
     const response = await client.get(
@@ -143,7 +203,6 @@ async function getMessages(conversationId) {
   }
 }
 
-// ارسال پیام - روش صحیح!
 async function sendMessage(conversationId, messageText) {
   try {
     const response = await client.post(
@@ -166,17 +225,14 @@ async function sendMessage(conversationId, messageText) {
   }
 }
 
-// پردازش یک گروه
 async function processGroup(groupId, todayJalali) {
   const groupKey = `${todayJalali}_${groupId}`;
 
-  // قبلاً فرستادم؟
   if (sentToday.has(groupKey)) {
     console.log(`   ⏭️ Already sent (cached)`);
     return;
   }
 
-  // گرفتن پیام‌ها
   const messages = await getMessages(groupId);
 
   if (messages.length === 0) {
@@ -184,7 +240,6 @@ async function processGroup(groupId, todayJalali) {
     return;
   }
 
-  // فیلتر پیام‌های امروز
   const todayMsgs = messages.filter((m) => {
     try {
       return gregorianToJalali(m.MessageCreateDateTime) === todayJalali;
@@ -198,14 +253,12 @@ async function processGroup(groupId, todayJalali) {
     return;
   }
 
-  // کسی "حاضر" زده؟
   const hasHazer = todayMsgs.some((m) => m.MessageText?.includes("حاضر"));
   if (!hasHazer) {
     console.log(`   ⏭️ No "حاضر" today`);
     return;
   }
 
-  // من پیام دادم؟
   const iSentToday = todayMsgs.some((m) => m.IsSendMessage === true);
   if (iSentToday) {
     console.log(`   ⏭️ I already sent`);
@@ -213,19 +266,18 @@ async function processGroup(groupId, todayJalali) {
     return;
   }
 
-  // ✅ ارسال!
   console.log(`   🎯 Sending "سلام، حاضر"...`);
   const sent = await sendMessage(groupId, "سلام، حاضر");
 
   if (sent) {
     console.log(`   ✅ SENT!`);
     sentToday.add(groupKey);
+    stats.messagesSent++;
   } else {
     console.log(`   ❌ Failed`);
   }
 }
 
-// چک روز جدید
 function checkNewDay() {
   const today = getTodayJalali();
   if (lastDate !== today) {
@@ -236,24 +288,22 @@ function checkNewDay() {
   return today;
 }
 
-// لوپ اصلی
 async function mainLoop() {
   console.log("🤖 Modabber Attendance Bot\n");
   console.log(`📋 Groups: ${GROUP_IDS.length}\n`);
 
   await login();
 
-  let loopCount = 0;
-
   while (true) {
-    loopCount++;
+    stats.loopCount++;
     const todayJalali = checkNewDay();
+    stats.lastCheck = new Date().toLocaleString("fa-IR");
 
     console.log("═".repeat(50));
     console.log(
-      `🔄 Loop #${loopCount} | ${todayJalali} | ${new Date().toLocaleTimeString(
-        "fa-IR"
-      )}`
+      `🔄 Loop #${
+        stats.loopCount
+      } | ${todayJalali} | ${new Date().toLocaleTimeString("fa-IR")}`
     );
     console.log("═".repeat(50));
 
@@ -277,4 +327,17 @@ async function mainLoop() {
   }
 }
 
-mainLoop().catch(console.error);
+// ═══════════════════════════════════════════════════════════
+// Start Everything
+// ═══════════════════════════════════════════════════════════
+
+app.listen(PORT, () => {
+  console.log(`🌐 Server running on port ${PORT}`);
+  console.log(`📊 Dashboard: http://localhost:${PORT}\n`);
+
+  // شروع self-ping
+  startSelfPing();
+
+  // شروع بات
+  mainLoop().catch(console.error);
+});
