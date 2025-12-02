@@ -253,9 +253,9 @@ async function processGroup(groupId, todayJalali) {
     return;
   }
 
-  const hasHazer = todayMsgs.some((m) => m.MessageText?.includes("حاضر"));
+  const hasHazer = todayMsgs.some((m) => m.MessageText?.includes("سلام"));
   if (!hasHazer) {
-    console.log(`   ⏭️ No "حاضر" today`);
+    console.log(`   ⏭️ No "سلام" today`);
     return;
   }
 
