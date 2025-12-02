@@ -1,4 +1,26 @@
-import puppeteer from "puppeteer";
+import axios from "axios";
+import * as cheerio from "cheerio";
+import { wrapper } from "axios-cookiejar-support";
+import { CookieJar } from "tough-cookie";
+
+const jar = new CookieJar();
+const client = wrapper(
+  axios.create({
+    jar,
+    withCredentials: true,
+  })
+);
+
+const BASE_URL = "https://haftometir.modabberonline.com";
+
+// لیست گروه‌ها (از مرورگر گرفتیم)
+const GROUP_IDS = [
+  12482, 12339, 10331, 11566, 11811, 11852, 11974, 11970, 11792, 11459, 11336,
+  11319, 10364, 10900, 9158, 10346,
+];
+
+const sentToday = new Set();
+let lastDate = "";
 
 // تبدیل میلادی به شمسی
 function gregorianToJalali(gDate) {
@@ -58,194 +80,206 @@ function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-// پارس XML
-function parseMessagesFromXML(xmlText) {
-  const messages = [];
-  const regex = /<ConversationMessageDTO>([\s\S]*?)<\/ConversationMessageDTO>/g;
-  let match;
+// لاگین
+async function login() {
+  console.log("🔐 Logging in...");
 
-  while ((match = regex.exec(xmlText)) !== null) {
-    const msgXml = match[1];
+  const loginPageUrl = `${BASE_URL}/Login.aspx?ReturnUrl=%2f&AspxAutoDetectCookieSupport=1`;
 
-    const get = (tag) => {
-      const r = new RegExp(`<${tag}[^>]*>([^<]*)</${tag}>`);
-      const m = msgXml.match(r);
-      return m ? m[1] : "";
-    };
-
-    messages.push({
-      MessageText: get("MessageText"),
-      MessageCreateDateTime: get("MessageCreateDateTime"),
-      SenderUserName: get("SenderUserName"),
-      IsSendMessage: get("IsSendMessage").toLowerCase() === "true",
-    });
-  }
-
-  return messages;
-}
-
-async function runBot() {
-  console.log("🤖 Modabber Attendance Bot\n");
-  console.log(`📅 Today: ${getTodayJalali()}\n`);
-
-  const browser = await puppeteer.launch({
-    headless: false,
-    defaultViewport: { width: 1280, height: 900 },
-    args: ["--lang=fa-IR", "--no-sandbox"],
+  const loginPageResponse = await client.get(loginPageUrl, {
+    headers: {
+      "User-Agent":
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+    },
   });
 
-  const page = await browser.newPage();
+  const $ = cheerio.load(loginPageResponse.data);
+  const formData = new URLSearchParams();
 
+  $('input[type="hidden"]').each((i, elem) => {
+    const name = $(elem).attr("name");
+    const value = $(elem).attr("value");
+    if (name && value) formData.append(name, value);
+  });
+
+  formData.append("txtUserName", "0201211971");
+  formData.append("txtPassword", "132375");
+  formData.append("LoginButton", "ورود به سیستم");
+
+  await client.post(loginPageUrl, formData, {
+    headers: {
+      "User-Agent":
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+      "Content-Type": "application/x-www-form-urlencoded",
+    },
+    maxRedirects: 5,
+    validateStatus: () => true,
+  });
+
+  console.log("✅ Logged in!\n");
+}
+
+// گرفتن پیام‌های گروه
+async function getMessages(conversationId) {
   try {
-    // ============ Login ============
-    console.log("🔐 Logging in...");
-    await page.goto(
-      "https://haftometir.modabberonline.com/Login.aspx?ReturnUrl=%2f",
-      { waitUntil: "networkidle2", timeout: 30000 }
+    const response = await client.get(
+      `${BASE_URL}/api/Messenger/GetMessageByConversationId/${conversationId}/0/30/0`,
+      {
+        headers: {
+          "User-Agent":
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+          Accept: "application/json",
+        },
+      }
     );
-    await delay(2000);
 
-    await page.type("#txtUserName", "0201211971", { delay: 80 });
-    await page.type("#txtPassword", "132375", { delay: 80 });
-    await page.click("#btnLogin");
-    await delay(5000);
-    console.log("✅ Logged in!\n");
-
-    // ============ Messenger ============
-    console.log("📨 Opening Messenger...");
-    await page.goto(
-      "https://haftometir.modabberonline.com/Modules/Messenger/Messenger.aspx",
-      { waitUntil: "networkidle2", timeout: 30000 }
-    );
-    await delay(4000);
-
-    await page.waitForSelector(
-      '[ng-repeat="conversation in vm.conversations.data"]',
-      { timeout: 15000 }
-    );
-    await delay(2000);
-
-    const count = await page.$$eval(
-      '[ng-repeat="conversation in vm.conversations.data"]',
-      (els) => els.length
-    );
-    console.log(`✅ Found ${count} groups\n`);
-
-    const results = [];
-    const todayJalali = getTodayJalali();
-
-    // ============ Loop through groups ============
-    for (let i = 0; i < count; i++) {
-      console.log(`\n${"─".repeat(50)}`);
-      console.log(`[${i + 1}/${count}]`);
-
-      const convs = await page.$$(
-        '[ng-repeat="conversation in vm.conversations.data"]'
-      );
-
-      if (!convs[i]) continue;
-
-      const groupName = await convs[i]
-        .$eval(".css-l8l8b8", (el) => el.textContent.trim())
-        .catch(() => "?");
-      console.log(`📝 ${groupName}`);
-
-      // Get API response
-      let apiResponse = null;
-
-      const handler = async (response) => {
-        if (
-          response.url().includes("/api/Messenger/GetMessageByConversationId/")
-        ) {
-          try {
-            apiResponse = await response.text();
-          } catch (e) {}
-        }
-      };
-
-      page.on("response", handler);
-      await convs[i].click();
-      await delay(3000);
-      page.off("response", handler);
-
-      if (!apiResponse) {
-        console.log("   ⚠️ No response");
-        results.push({ group: groupName, status: "⚠️ Error" });
-        continue;
-      }
-
-      const messages = parseMessagesFromXML(apiResponse);
-
-      // فیلتر پیام‌های امروز شمسی
-      const todayMsgs = messages.filter(
-        (m) => gregorianToJalali(m.MessageCreateDateTime) === todayJalali
-      );
-
-      console.log(`   📬 Today: ${todayMsgs.length} messages`);
-
-      // آیا امروز کسی "حاضر" زده؟
-      const hasAttendance = todayMsgs.some((m) =>
-        m.MessageText.includes("حاضر")
-      );
-
-      if (!hasAttendance) {
-        console.log("   💤 No attendance yet");
-        results.push({ group: groupName, status: "💤 No attendance" });
-        continue;
-      }
-
-      // آیا من امروز پیام دادم؟ (IsSendMessage = true)
-      const iSentToday = todayMsgs.some((m) => m.IsSendMessage === true);
-
-      if (iSentToday) {
-        console.log("   ✅ Already sent today");
-        results.push({ group: groupName, status: "✅ Done" });
-        continue;
-      }
-
-      // ============ Send! ============
-      console.log("   🚀 Sending...");
-
-      const textarea = await page.$("#message-text");
-      if (!textarea) {
-        console.log("   ⚠️ Can't send");
-        results.push({ group: groupName, status: "⚠️ Can't send" });
-        continue;
-      }
-
-      await textarea.click();
-      await delay(200);
-      await textarea.type("سلام، حاضر", { delay: 40 });
-      await delay(500);
-
-      const sendBtn = await page.$('img[data-testid="send-button"]');
-      if (sendBtn) {
-        await sendBtn.click();
-        console.log("   ✅ SENT!");
-        results.push({ group: groupName, status: "✅ SENT!" });
-      } else {
-        console.log("   ⚠️ No send button");
-        results.push({ group: groupName, status: "⚠️ No button" });
-      }
-
-      await delay(2000);
+    if (response.data?.ConversationMessageDTO) {
+      return response.data.ConversationMessageDTO;
     }
-
-    // ============ Summary ============
-    console.log("\n" + "═".repeat(50));
-    console.log("📊 SUMMARY");
-    console.log("═".repeat(50));
-
-    results.forEach((r, i) => {
-      console.log(`${i + 1}. ${r.status.padEnd(20)} ${r.group}`);
-    });
-
-    const sent = results.filter((r) => r.status.includes("SENT")).length;
-    console.log(`\n🎯 Sent: ${sent} groups`);
+    return [];
   } catch (error) {
-    console.error("❌ Error:", error.message);
-    await page.screenshot({ path: "error.png" });
+    console.log(`   ❌ Error getting messages: ${error.message}`);
+    return [];
   }
 }
 
-runBot();
+// ارسال پیام
+async function sendMessage(conversationId, messageText) {
+  try {
+    const response = await client.post(
+      `${BASE_URL}/api/Messenger/SendMessage`,
+      {
+        ConversationId: conversationId,
+        MessageText: messageText,
+        MessageType: 0,
+        ParentMessageId: 0,
+      },
+      {
+        headers: {
+          "User-Agent":
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+          "Content-Type": "application/json",
+          Accept: "application/json",
+        },
+      }
+    );
+
+    return response.status === 200;
+  } catch (error) {
+    console.log(`   ❌ Error sending: ${error.message}`);
+    return false;
+  }
+}
+
+// پردازش یک گروه
+async function processGroup(groupId, todayJalali) {
+  const groupKey = `${todayJalali}_${groupId}`;
+
+  // قبلاً فرستادم؟
+  if (sentToday.has(groupKey)) {
+    console.log(`   ⏭️ Already sent (cached)`);
+    return;
+  }
+
+  // گرفتن پیام‌ها
+  const messages = await getMessages(groupId);
+
+  if (messages.length === 0) {
+    console.log(`   ⏭️ No messages`);
+    return;
+  }
+
+  // فیلتر پیام‌های امروز
+  const todayMsgs = messages.filter((m) => {
+    try {
+      return gregorianToJalali(m.MessageCreateDateTime) === todayJalali;
+    } catch {
+      return false;
+    }
+  });
+
+  if (todayMsgs.length === 0) {
+    console.log(`   ⏭️ No messages today`);
+    return;
+  }
+
+  // کسی "حاضر" زده؟
+  const hasHazer = todayMsgs.some((m) => m.MessageText?.includes("حاضر"));
+  if (!hasHazer) {
+    console.log(`   ⏭️ No "حاضر" today`);
+    return;
+  }
+
+  // من پیام دادم؟
+  const iSentToday = todayMsgs.some((m) => m.IsSendMessage === true);
+  if (iSentToday) {
+    console.log(`   ⏭️ I already sent`);
+    sentToday.add(groupKey);
+    return;
+  }
+
+  // ✅ ارسال!
+  console.log(`   🎯 Sending "سلام، حاضر"...`);
+  const sent = await sendMessage(groupId, "سلام، حاضر");
+
+  if (sent) {
+    console.log(`   ✅ SENT!`);
+    sentToday.add(groupKey);
+  } else {
+    console.log(`   ❌ Failed`);
+  }
+}
+
+// چک روز جدید
+function checkNewDay() {
+  const today = getTodayJalali();
+  if (lastDate !== today) {
+    console.log(`\n🌅 New day: ${today}`);
+    sentToday.clear();
+    lastDate = today;
+  }
+  return today;
+}
+
+// لوپ اصلی
+async function mainLoop() {
+  console.log("🤖 Modabber Attendance Bot\n");
+  console.log(`📋 Groups: ${GROUP_IDS.length}\n`);
+
+  await login();
+
+  let loopCount = 0;
+
+  while (true) {
+    loopCount++;
+    const todayJalali = checkNewDay();
+
+    console.log("═".repeat(50));
+    console.log(
+      `🔄 Loop #${loopCount} | ${todayJalali} | ${new Date().toLocaleTimeString(
+        "fa-IR"
+      )}`
+    );
+    console.log("═".repeat(50));
+
+    try {
+      for (let i = 0; i < GROUP_IDS.length; i++) {
+        const groupId = GROUP_IDS[i];
+        console.log(`\n[${i + 1}/${GROUP_IDS.length}] Group ${groupId}`);
+        await processGroup(groupId, todayJalali);
+        await delay(500);
+      }
+
+      console.log("\n✅ All groups checked!");
+    } catch (error) {
+      console.error(`\n❌ Error: ${error.message}`);
+      console.log("🔄 Re-logging in...");
+      await login();
+    }
+
+    console.log("\n⏳ Waiting 2 minutes...");
+    await delay(120000);
+  }
+}
+
+mainLoop().catch(console.error);

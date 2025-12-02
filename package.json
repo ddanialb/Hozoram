@@ -1,13 +1,19 @@
 {
-  "name": "modabber-homework-bot",
+  "name": "modabber-attendance-bot",
   "version": "1.0.0",
-  "description": "Bot to extract homework data from Modabber Online using HTTP requests",
+  "description": "Automatic attendance bot for Modabber",
   "main": "bot.js",
   "type": "module",
   "scripts": {
-    "start": "node bot.js"
+    "start": "node bot.js",
+    "dev": "node --watch bot.js"
   },
   "dependencies": {
-    "puppeteer": "^21.0.0"
-  }
+    "axios": "^1.6.2",
+    "axios-cookiejar-support": "^5.0.0",
+    "cheerio": "^1.0.0-rc.12",
+    "tough-cookie": "^4.1.3"
+  },
+  "author": "",
+  "license": "MIT"
 }
