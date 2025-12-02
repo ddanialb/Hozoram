@@ -1,0 +1,13 @@
+{
+  "name": "modabber-homework-bot",
+  "version": "1.0.0",
+  "description": "Bot to extract homework data from Modabber Online using HTTP requests",
+  "main": "bot.js",
+  "type": "module",
+  "scripts": {
+    "start": "node bot.js"
+  },
+  "dependencies": {
+    "puppeteer": "^21.0.0"
+  }
+}

@@ -1,0 +1,9 @@
+services:
+  - type: cron
+    name: modabber-homework-bot
+    env: docker
+    schedule: "0 */6 * * *"  # Run every 6 hours
+    dockerfilePath: ./Dockerfile
+    envVars:
+      - key: NODE_ENV
+        value: production
